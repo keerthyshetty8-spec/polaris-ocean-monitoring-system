@@ -1,0 +1,426 @@
+openapi: 3.0.3
+info:
+  title: POLARIS — Ocean Monitoring System API
+  description: |
+    M4 & M5 Backend & Communication Layer Specification for the POLARIS ocean buoy and marine monitoring platform.
+    Receives telemetry from ESP32 via MQTT and HTTP fallback, manages offline synchronization, stores metrics in PostgreSQL, and serves clean REST and Real-Time APIs to the M6 Frontend Dashboard.
+
+    **Hardware Note:**
+    Exact ESP32 JSON payload schemas and MQTT topic namespaces are marked as **PROVISIONAL** pending final M2 firmware specifications.
+  version: 1.0.0
+  contact:
+    name: POLARIS M4 & M5 Backend Engineering Team
+servers:
+  - url: /api/v1
+    description: Current Base API Server
+
+paths:
+  /ingest:
+    post:
+      summary: ESP32 Sensor Telemetry Ingestion (Provisional)
+      description: Ingests a single real-time or historical telemetry record from ESP32 hardware or simulator.
+      security:
+        - Esp32ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Esp32SensorPayload'
+            example:
+              deviceId: "POLARIS-001"
+              timestamp: "2026-09-07T10:30:00Z"
+              temperature: 28.4
+              pressure: 1.26
+              depth: 12.6
+              conductivity: 4.8
+              salinity: 34.2
+              atmospheric:
+                temperature: 29.1
+                pressure: 1008.2
+                humidity: 72
+              gnss:
+                latitude: 17.385
+                longitude: 78.4867
+              battery: 87
+              batteryVoltage: 12.4
+              source: "live"
+      responses:
+        '201':
+          description: Telemetry reading successfully ingested and stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseSuccess'
+        '200':
+          description: Duplicate telemetry reading detected and skipped
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseSuccess'
+        '400':
+          description: Validation error in sensor payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseError'
+        '401':
+          description: Missing or invalid ESP32 API Key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseError'
+
+  /ingest/batch:
+    post:
+      summary: ESP32 Offline Reconnection Batch Ingestion
+      description: Ingests an array of buffered readings accumulated on ESP32 local SD storage during network outages.
+      security:
+        - Esp32ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                batchId:
+                  type: string
+                records:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/Esp32SensorPayload'
+      responses:
+        '200':
+          description: Batch synchronization summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseSuccess'
+
+  /polaris/status:
+    get:
+      summary: Get Overall POLARIS Device Status
+      description: Returns online/offline status (dynamically evaluated based on lastSeen), battery %, communication state, and latest coordinates.
+      parameters:
+        - name: deviceId
+          in: query
+          required: false
+          schema:
+            type: string
+            default: "POLARIS-001"
+      responses:
+        '200':
+          description: Current POLARIS status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseSuccess'
+
+  /sensors/latest:
+    get:
+      summary: Get Latest Sensor Reading
+      parameters:
+        - name: deviceId
+          in: query
+          schema:
+            type: string
+            default: "POLARIS-001"
+      responses:
+        '200':
+          description: Latest sensor reading
+
+  /sensors/history:
+    get:
+      summary: Get Paginated Sensor Reading History
+      parameters:
+        - name: deviceId
+          in: query
+          schema:
+            type: string
+        - name: startDate
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: endDate
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+      responses:
+        '200':
+          description: Historical sensor records
+
+  /sensors/temperature/history:
+    get:
+      summary: Get Water Temperature History
+      parameters:
+        - name: deviceId
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Time-series temperature array
+
+  /sensors/depth/history:
+    get:
+      summary: Get Ocean Depth History
+      responses:
+        '200':
+          description: Time-series depth array
+
+  /sensors/salinity/history:
+    get:
+      summary: Get Ocean Salinity History
+      responses:
+        '200':
+          description: Time-series salinity array
+
+  /sensors/conductivity/history:
+    get:
+      summary: Get Electrical Conductivity History
+      responses:
+        '200':
+          description: Time-series conductivity array
+
+  /sensors/atmospheric/latest:
+    get:
+      summary: Get Latest BME280 Atmospheric Metrics
+      responses:
+        '200':
+          description: Air temp, pressure, and relative humidity
+
+  /depth/profile:
+    get:
+      summary: Get Visual Ocean Depth Stratification Profile
+      description: Returns depth points and layered physical parameters for M6 visual rendering.
+      responses:
+        '200':
+          description: Depth profile data
+
+  /location/current:
+    get:
+      summary: Get Current GNSS Location
+      responses:
+        '200':
+          description: Current latitude, longitude, and fix timestamp
+
+  /location/history:
+    get:
+      summary: Get GNSS Location History / Trajectory Track
+      responses:
+        '200':
+          description: Chronological GPS coordinates list
+
+  /device/battery:
+    get:
+      summary: Get Current Battery Level and Low Warning
+      responses:
+        '200':
+          description: Battery status
+
+  /device/communication:
+    get:
+      summary: Get Communication Link Status
+      responses:
+        '200':
+          description: Link state, protocol, and latency details
+
+  /alerts:
+    get:
+      summary: Get Active Unresolved Alerts
+      responses:
+        '200':
+          description: List of active alerts
+
+  /alerts/history:
+    get:
+      summary: Get Historic Alerts
+      responses:
+        '200':
+          description: List of all past and resolved alerts
+
+  /alerts/{id}/resolve:
+    patch:
+      summary: Mark Alert as Resolved
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Updated alert record
+
+  /missions:
+    get:
+      summary: List Deployment Missions
+      responses:
+        '200':
+          description: Array of mission records
+    post:
+      summary: Create New Ocean Deployment Mission
+      responses:
+        '201':
+          description: Created mission
+
+  /missions/{id}:
+    get:
+      summary: Get Mission Details and Calculated Sensor Summary
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Mission metadata with calculated min/max/avg metrics
+
+  /export/sensors.csv:
+    get:
+      summary: Export Sensor History as CSV
+      responses:
+        '200':
+          description: CSV file download
+          content:
+            text/csv:
+              schema:
+                type: string
+
+  /realtime/stream:
+    get:
+      summary: Server-Sent Events (SSE) Live Telemetry Stream
+      description: Browser-friendly real-time event stream emitting `sensor:update`, `device:update`, `location:update`, and `alert:new`.
+      responses:
+        '200':
+          description: Realtime event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+components:
+  securitySchemes:
+    Esp32ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: ESP32 device authorization key (Configured via ESP32_API_KEY)
+
+  schemas:
+    Esp32SensorPayload:
+      type: object
+      required:
+        - deviceId
+        - timestamp
+      properties:
+        deviceId:
+          type: string
+          example: "POLARIS-001"
+        timestamp:
+          type: string
+          format: date-time
+          example: "2026-09-07T10:30:00Z"
+        temperature:
+          type: number
+          description: Water temperature in degrees Celsius
+          example: 28.4
+        pressure:
+          type: number
+          description: Hydrostatic pressure in bar
+          example: 1.26
+        depth:
+          type: number
+          description: Calculated water depth in meters
+          example: 12.6
+        conductivity:
+          type: number
+          description: Electrical conductivity in mS/cm
+          example: 4.8
+        salinity:
+          type: number
+          description: Salinity in PSU / ppt
+          example: 34.2
+        atmospheric:
+          type: object
+          properties:
+            temperature:
+              type: number
+              example: 29.1
+            pressure:
+              type: number
+              example: 1008.2
+            humidity:
+              type: number
+              example: 72
+        gnss:
+          type: object
+          required:
+            - latitude
+            - longitude
+          properties:
+            latitude:
+              type: number
+              example: 17.385
+            longitude:
+              type: number
+              example: 78.4867
+            altitude:
+              type: number
+              example: 0.5
+            speed:
+              type: number
+              example: 1.2
+        battery:
+          type: number
+          description: Remaining battery percentage (0-100)
+          example: 87
+        batteryVoltage:
+          type: number
+          description: Pack voltage in Volts
+          example: 12.4
+        source:
+          type: string
+          enum: [live, buffered_sd, simulator]
+          default: live
+
+    ApiResponseSuccess:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+
+    ApiResponseError:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              example: "SENSOR_DATA_INVALID"
+            message:
+              type: string
+              example: "Sensor payload failed validation"
+            details:
+              type: object

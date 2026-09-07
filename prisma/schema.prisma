@@ -1,0 +1,161 @@
+// POLARIS — Ocean Monitoring System
+// Prisma Schema for PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Device {
+  id          String   @id @default(uuid())
+  deviceId    String   @unique
+  name        String
+  status      String   @default("offline") // "online" | "offline" | "degraded"
+  lastSeen    DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  readings       SensorReading[]
+  locations      Location[]
+  alerts         Alert[]
+  missions       Mission[]
+  commStatuses   CommunicationStatus[]
+  syncRecords    SyncRecord[]
+
+  @@index([deviceId])
+  @@index([status])
+  @@index([lastSeen])
+}
+
+model SensorReading {
+  id              String   @id @default(uuid())
+  deviceId        String
+  timestamp       DateTime
+  temperature     Float?   // Ocean water temperature (°C)
+  pressure        Float?   // Hydrostatic pressure (bar / dbar)
+  depth           Float?   // Depth below sea level (meters)
+  conductivity    Float?   // Electrical conductivity (mS/cm)
+  salinity        Float?   // Practical Salinity Units (PSU / ppt)
+  
+  // Atmospheric parameters from BME280 or equivalent (JSON or discrete)
+  atmosphericTemp     Float? // Atmospheric air temperature (°C)
+  atmosphericPressure Float? // Atmospheric pressure (hPa)
+  atmosphericHumidity Float? // Relative humidity (%)
+  
+  battery         Float?   // Battery percentage (0 - 100%)
+  batteryVoltage  Float?   // Battery pack voltage (V)
+
+  // Provenance & Deduplication
+  source          String   @default("live") // "live" | "buffered_sd" | "simulator"
+  ingestionMethod String   @default("http") // "http" | "mqtt"
+  eventId         String?  // Hardware event ID if provided
+  fingerprint     String   // Deduplication hash (deviceId + timestamp + payload summary)
+  
+  missionId       String?
+  createdAt       DateTime @default(now())
+
+  device          Device   @relation(fields: [deviceId], references: [deviceId], onDelete: Cascade)
+  mission         Mission? @relation(fields: [missionId], references: [missionId], onDelete: SetNull)
+
+  @@unique([deviceId, fingerprint])
+  @@index([deviceId, timestamp(sort: Desc)])
+  @@index([deviceId])
+  @@index([timestamp])
+  @@index([missionId])
+  @@index([fingerprint])
+}
+
+model Location {
+  id          String   @id @default(uuid())
+  deviceId    String
+  latitude    Float
+  longitude   Float
+  altitude    Float?
+  speed       Float?
+  timestamp   DateTime
+  missionId   String?
+
+  device      Device   @relation(fields: [deviceId], references: [deviceId], onDelete: Cascade)
+  mission     Mission? @relation(fields: [missionId], references: [missionId], onDelete: SetNull)
+
+  @@index([deviceId, timestamp(sort: Desc)])
+  @@index([deviceId])
+  @@index([timestamp])
+  @@index([missionId])
+}
+
+model CommunicationStatus {
+  id          String   @id @default(uuid())
+  deviceId    String
+  protocol    String   // "MQTT" | "HTTP" | "BLE"
+  status      String   // "connected" | "disconnected" | "syncing"
+  lastSeen    DateTime @default(now())
+  timestamp   DateTime @default(now())
+  details     String?  // JSON string or notes (e.g. RSSI, latency, packet loss)
+
+  device      Device   @relation(fields: [deviceId], references: [deviceId], onDelete: Cascade)
+
+  @@index([deviceId, timestamp(sort: Desc)])
+  @@index([protocol])
+}
+
+model Alert {
+  id          String    @id @default(uuid())
+  deviceId    String
+  type        String    // LOW_BATTERY | SENSOR_FAILURE | COMMUNICATION_LOST | ABNORMAL_TEMPERATURE | ABNORMAL_DEPTH | OUT_OF_RANGE
+  severity    String    // "critical" | "warning" | "info"
+  message     String
+  timestamp   DateTime  @default(now())
+  resolved    Boolean   @default(false)
+  resolvedAt  DateTime?
+  metadata    String?   // JSON representation of triggering values and thresholds
+
+  device      Device    @relation(fields: [deviceId], references: [deviceId], onDelete: Cascade)
+
+  @@index([deviceId, timestamp(sort: Desc)])
+  @@index([type])
+  @@index([resolved])
+  @@index([severity])
+}
+
+model Mission {
+  id              String          @id @default(uuid())
+  missionId       String          @unique
+  deviceId        String
+  name            String
+  description     String?
+  startTime       DateTime
+  endTime         DateTime?
+  status          String          @default("active") // "active" | "completed" | "aborted"
+  createdAt       DateTime        @default(now())
+
+  device          Device          @relation(fields: [deviceId], references: [deviceId], onDelete: Cascade)
+  readings        SensorReading[]
+  locations       Location[]
+
+  @@index([deviceId])
+  @@index([status])
+  @@index([startTime])
+}
+
+model SyncRecord {
+  id           String    @id @default(uuid())
+  deviceId     String
+  eventId      String?
+  fingerprint  String
+  batchId      String?
+  recordsCount Int       @default(1)
+  receivedAt   DateTime  @default(now())
+  syncedAt     DateTime  @default(now())
+  status       String    @default("success") // "success" | "duplicate" | "failed"
+
+  device       Device    @relation(fields: [deviceId], references: [deviceId], onDelete: Cascade)
+
+  @@index([deviceId])
+  @@index([fingerprint])
+  @@index([syncedAt])
+}

@@ -1,0 +1,6 @@
+{
+  "name": "POLARIS Ocean Monitoring System Backend",
+  "description": "M4 & M5 backend & communication layer for POLARIS ESP32 ocean monitoring system with MQTT/HTTP ingestion, PostgreSQL/Prisma models, offline sync, real-time telemetry, and M6 dashboard APIs.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
