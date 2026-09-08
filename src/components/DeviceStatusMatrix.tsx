@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   MapPin,
   Radio,
@@ -32,6 +32,15 @@ export const DeviceStatusMatrix: React.FC<DeviceStatusMatrixProps> = ({
 }) => {
   const [showHistory, setShowHistory] = useState(false);
 
+  // 1-second ticker to keep elapsed time and timeout expiration synchronized in real time
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setTick((t) => (t + 1) % 10000);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
   const timeoutThreshold = statusData?.timeoutThresholdSeconds ?? 60;
   const lastSeenMs = statusData?.lastSeen ? new Date(statusData.lastSeen).getTime() : 0;
   const hasValidTimestamp = lastSeenMs > 0 && !isNaN(lastSeenMs);
@@ -51,7 +60,7 @@ export const DeviceStatusMatrix: React.FC<DeviceStatusMatrixProps> = ({
   const lastSeen = statusData?.lastSeen || commData?.lastSeen;
   const location = locationData?.location || statusData?.currentLocation;
   const protocol = commData?.protocol || statusData?.communication?.protocol || 'HTTP';
-  const commStatus = commData?.status || statusData?.communication?.status || (isOnline ? 'connected' : 'disconnected');
+  const commStatus = !isOnline ? 'disconnected' : (commData?.status || statusData?.communication?.status || 'connected');
   const batteryLevel = batteryData?.level ?? statusData?.battery?.level ?? null;
   const batteryVoltage = batteryData?.voltage ?? statusData?.battery?.voltage ?? null;
   const isLowBattery = (batteryLevel !== null && batteryLevel <= 20) || (batteryData?.isLow ?? false);

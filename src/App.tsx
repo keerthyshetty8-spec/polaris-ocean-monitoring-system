@@ -125,9 +125,14 @@ export default function App() {
 
     es.onopen = () => {
       if (!isMountedRef.current) return;
+      const wasReconnecting = retryCountRef.current > 0;
       retryCountRef.current = 0; // Reset backoff counter
       setSseStatus('connected');
       setStatusLog('[SSE STREAM] Connected to POLARIS realtime telemetry channel.');
+      if (wasReconnecting) {
+        // Automatically sync latest state after reconnection
+        fetchAll();
+      }
     };
 
     es.onerror = () => {
@@ -385,9 +390,9 @@ export default function App() {
       conductivity: overrides?.conductivity ?? parseFloat((4.78 + (Math.random() - 0.5) * 0.1).toFixed(2)),
       salinity: overrides?.salinity ?? parseFloat((34.6 + (Math.random() - 0.5) * 0.2).toFixed(2)),
       atmospheric: {
-        temperature: 28.9,
-        pressure: 1010.5,
-        humidity: 70,
+        temperature: overrides?.atmospheric?.temperature ?? parseFloat((28.5 + (Math.random() - 0.5) * 1.5).toFixed(1)),
+        pressure: overrides?.atmospheric?.pressure ?? parseFloat((1012.0 + (Math.random() - 0.5) * 3.0).toFixed(1)),
+        humidity: overrides?.atmospheric?.humidity ?? Math.round(70 + (Math.random() - 0.5) * 8),
       },
       gnss: {
         latitude: parseFloat((17.385 + (Math.random() - 0.5) * 0.002).toFixed(6)),
@@ -395,8 +400,8 @@ export default function App() {
         altitude: 0.1,
         speed: 0.9,
       },
-      battery: overrides?.battery ?? 86,
-      batteryVoltage: overrides?.batteryVoltage ?? 12.3,
+      battery: overrides?.battery ?? Math.max(15, Math.min(100, Math.round(86 + (Math.random() - 0.5) * 2))),
+      batteryVoltage: overrides?.batteryVoltage ?? parseFloat((12.1 + ((overrides?.battery ?? 86) / 100) * 0.7 + (Math.random() - 0.5) * 0.04).toFixed(2)),
       source: 'live',
     };
     lastPayloadRef.current = payload;

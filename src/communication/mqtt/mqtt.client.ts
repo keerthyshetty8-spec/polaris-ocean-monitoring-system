@@ -86,3 +86,17 @@ export function getMqttClient(): MqttClient | null {
 export function isMqttConnected(): boolean {
   return isConnected;
 }
+
+export function closeMqttClient(): Promise<void> {
+  return new Promise((resolve) => {
+    if (clientInstance) {
+      clientInstance.end(false, () => {
+        clientInstance = null;
+        isConnected = false;
+        resolve();
+      });
+    } else {
+      resolve();
+    }
+  });
+}

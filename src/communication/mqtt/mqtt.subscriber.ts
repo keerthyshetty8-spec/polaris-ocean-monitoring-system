@@ -17,7 +17,7 @@ export function startMqttSubscriber() {
   const telemetryTopic = `${env.MQTT_TOPIC_PREFIX}/+/telemetry`;
   const batchTopic = `${env.MQTT_TOPIC_PREFIX}/+/batch`;
 
-  client.on('connect', () => {
+  const doSubscribe = () => {
     client.subscribe([telemetryTopic, batchTopic], { qos: 1 }, (err, granted) => {
       if (err) {
         logger.error('Failed to subscribe to MQTT topics', { error: err.message });
@@ -27,7 +27,12 @@ export function startMqttSubscriber() {
         });
       }
     });
-  });
+  };
+
+  if (client.connected) {
+    doSubscribe();
+  }
+  client.on('connect', doSubscribe);
 
   client.on('message', async (topic: string, messageBuffer: Buffer) => {
     const rawString = messageBuffer.toString();

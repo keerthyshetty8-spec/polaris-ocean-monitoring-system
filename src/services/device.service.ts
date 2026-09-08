@@ -1,5 +1,6 @@
 import { db } from '../config/database.js';
 import { env } from '../config/env.js';
+import { isMqttConnected } from '../communication/mqtt/mqtt.client.js';
 
 export class DeviceService {
   /**
@@ -123,6 +124,11 @@ export class DeviceService {
       status: status.isOnline ? 'connected' : 'disconnected',
       isOnline: status.isOnline,
       lastSeen: status.lastSeen,
+      mqtt: {
+        connected: isMqttConnected(),
+        brokerConfigured: Boolean(env.MQTT_BROKER_URL),
+        topicPrefix: env.MQTT_TOPIC_PREFIX,
+      },
       details: latestComm?.details ? JSON.parse(latestComm.details) : null,
     };
   }

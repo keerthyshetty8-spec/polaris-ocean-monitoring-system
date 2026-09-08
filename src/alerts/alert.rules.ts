@@ -71,5 +71,21 @@ export function evaluateSensorAlertRules(reading: {
     }
   }
 
+  // 5. Sensor Failure Check (e.g. all primary oceanographic transducers null or disconnected)
+  if (
+    (reading.temperature === null || reading.temperature === undefined) &&
+    (reading.depth === null || reading.depth === undefined) &&
+    (reading.conductivity === null || reading.conductivity === undefined) &&
+    (reading.salinity === null || reading.salinity === undefined)
+  ) {
+    alerts.push({
+      triggered: true,
+      type: 'SENSOR_FAILURE',
+      severity: 'critical',
+      message: 'Primary marine sensor array failure: water temperature, depth, salinity, and conductivity telemetry missing',
+      metadata: { deviceId: reading.deviceId },
+    });
+  }
+
   return alerts;
 }

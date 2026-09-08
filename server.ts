@@ -6,6 +6,7 @@ import { createApp } from './src/app.js';
 import { env } from './src/config/env.js';
 import { checkDatabaseConnection } from './src/config/database.js';
 import { startMqttSubscriber } from './src/communication/mqtt/mqtt.subscriber.js';
+import { closeMqttClient } from './src/communication/mqtt/mqtt.client.js';
 import { initWebSocketServer } from './src/realtime/websocket.js';
 import { createLogger } from './src/utils/logger.js';
 import { Esp32Simulator } from './simulator/esp32-simulator.js';
@@ -70,6 +71,26 @@ async function start() {
       }
     }, 2000);
   }
+
+  const gracefulShutdown = async (signal: string) => {
+    logger.info(`Received ${signal}. Starting graceful shutdown...`);
+    try {
+      await closeMqttClient();
+    } catch (err: any) {
+      logger.warn('Error closing MQTT client during shutdown:', { error: err.message });
+    }
+    server.close(() => {
+      logger.info('HTTP server closed cleanly.');
+      process.exit(0);
+    });
+    setTimeout(() => {
+      logger.warn('Shutdown timeout reached. Forcing exit.');
+      process.exit(1);
+    }, 5000).unref();
+  };
+
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 }
 
 start().catch((err) => {

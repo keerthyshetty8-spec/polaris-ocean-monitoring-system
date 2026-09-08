@@ -49,8 +49,8 @@ export class Esp32Simulator {
       salinity,
       atmospheric: {
         temperature: parseFloat((29.2 + Math.sin(this.sequence / 5) * 1.5).toFixed(2)),
-        pressure: 1009.5,
-        humidity: 71.0,
+        pressure: parseFloat((1011.5 + Math.cos(this.sequence / 7) * 2.0).toFixed(1)),
+        humidity: parseFloat((71.0 + Math.sin(this.sequence / 6) * 4.0).toFixed(1)),
       },
       gnss: {
         latitude: parseFloat(this.currentLat.toFixed(6)),

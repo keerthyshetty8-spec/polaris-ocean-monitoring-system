@@ -11,5 +11,6 @@ router.get('/sensors/salinity/history', SensorController.getSalinityHistory);
 router.get('/sensors/conductivity/history', SensorController.getConductivityHistory);
 router.get('/sensors/atmospheric/latest', SensorController.getAtmosphericLatest);
 router.get('/depth/profile', SensorController.getDepthProfile);
+router.get('/sensors/depth-profile', SensorController.getDepthProfile);
 
 export default router;
