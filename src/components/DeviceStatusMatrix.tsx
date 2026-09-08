@@ -32,7 +32,22 @@ export const DeviceStatusMatrix: React.FC<DeviceStatusMatrixProps> = ({
 }) => {
   const [showHistory, setShowHistory] = useState(false);
 
-  const isOnline = statusData?.isOnline ?? commData?.isOnline ?? false;
+  const timeoutThreshold = statusData?.timeoutThresholdSeconds ?? 60;
+  const lastSeenMs = statusData?.lastSeen ? new Date(statusData.lastSeen).getTime() : 0;
+  const hasValidTimestamp = lastSeenMs > 0 && !isNaN(lastSeenMs);
+  const elapsedSeconds = hasValidTimestamp
+    ? Math.max(0, Math.floor((Date.now() - lastSeenMs) / 1000))
+    : (statusData?.secondsSinceLastSeen ?? 999999);
+  const isExpired = hasValidTimestamp ? elapsedSeconds > timeoutThreshold : false;
+
+  const isOnline = Boolean(
+    !isExpired && (
+      statusData?.isOnline === true ||
+      statusData?.status === 'online' ||
+      commData?.isOnline === true ||
+      commData?.status === 'connected'
+    )
+  );
   const lastSeen = statusData?.lastSeen || commData?.lastSeen;
   const location = locationData?.location || statusData?.currentLocation;
   const protocol = commData?.protocol || statusData?.communication?.protocol || 'HTTP';

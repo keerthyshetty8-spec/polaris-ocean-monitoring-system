@@ -38,7 +38,33 @@ export const StatusHeader: React.FC<StatusHeaderProps> = ({
   onRefresh,
   onReconnectSse,
 }) => {
-  const isOnline = statusData?.isOnline ?? commData?.isOnline ?? false;
+  // 1-second ticker to keep elapsed time and timeout expiration reactive
+  const [, setTick] = React.useState(0);
+  React.useEffect(() => {
+    const timer = setInterval(() => {
+      setTick((t) => (t + 1) % 10000);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const timeoutThreshold = statusData?.timeoutThresholdSeconds ?? 60;
+  const lastSeenMs = statusData?.lastSeen ? new Date(statusData.lastSeen).getTime() : 0;
+  const hasValidTimestamp = lastSeenMs > 0 && !isNaN(lastSeenMs);
+  const elapsedSeconds = hasValidTimestamp
+    ? Math.max(0, Math.floor((Date.now() - lastSeenMs) / 1000))
+    : (statusData?.secondsSinceLastSeen ?? 999999);
+  const isExpired = hasValidTimestamp ? elapsedSeconds > timeoutThreshold : false;
+
+  const isOnline = Boolean(
+    !isExpired && (
+      statusData?.isOnline === true ||
+      statusData?.status === 'online' ||
+      commData?.isOnline === true ||
+      commData?.status === 'connected'
+    )
+  );
+
+  const displaySecondsAgo = hasValidTimestamp ? elapsedSeconds : statusData?.secondsSinceLastSeen;
   const batteryLevel = batteryData?.level ?? statusData?.battery?.level ?? null;
   const batteryVoltage = batteryData?.voltage ?? statusData?.battery?.voltage ?? null;
   const isLowBattery = (batteryLevel !== null && batteryLevel <= 20) || statusData?.battery?.status === 'low';
@@ -100,9 +126,9 @@ export const StatusHeader: React.FC<StatusHeaderProps> = ({
             </span>
             {isOnline ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
             <span>{isOnline ? 'BUOY ONLINE' : 'BUOY OFFLINE'}</span>
-            {statusData?.secondsSinceLastSeen !== undefined && statusData.secondsSinceLastSeen > 0 && (
+            {displaySecondsAgo !== undefined && displaySecondsAgo > 0 && (
               <span className="text-slate-400 font-normal text-[11px]">
-                ({statusData.secondsSinceLastSeen}s ago)
+                ({displaySecondsAgo}s ago)
               </span>
             )}
           </div>

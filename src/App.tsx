@@ -17,6 +17,7 @@ import {
   DeviceBattery,
   DeviceCommunication,
   GpsLocation,
+  SseConnectionState,
 } from './types';
 import { AlertCircle, RefreshCw } from 'lucide-react';
 
@@ -32,13 +33,18 @@ export default function App() {
   const [commData, setCommData] = useState<DeviceCommunication | null>(null);
   const [locationData, setLocationData] = useState<GpsLocation | null>(null);
 
-  const [sseConnected, setSseConnected] = useState<boolean>(false);
+  const [sseStatus, setSseStatus] = useState<SseConnectionState>('connecting');
   const [initialLoading, setInitialLoading] = useState<boolean>(true);
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [statusLog, setStatusLog] = useState<string>('Initializing POLARIS telemetry pipeline...');
   const [isSimulating, setIsSimulating] = useState<boolean>(false);
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
 
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryCountRef = useRef<number>(0);
+  const isMountedRef = useRef<boolean>(true);
   const simulationTimerRef = useRef<any>(null);
   const lastPayloadRef = useRef<any>(null);
 
@@ -92,23 +98,63 @@ export default function App() {
     }
   }, []);
 
-  // 2. Setup Real-time SSE Connection
-  useEffect(() => {
-    fetchAll();
+  const handleManualRefresh = async () => {
+    setIsRefreshing(true);
+    await fetchAll();
+    setIsRefreshing(false);
+  };
 
-    const eventSource = new EventSource('/api/v1/realtime/stream');
+  // 2. Setup Real-time SSE Connection with exponential backoff & cleanup
+  const connectSse = useCallback(() => {
+    // Teardown previous EventSource to prevent duplicate connections
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
 
-    eventSource.onopen = () => {
-      setSseConnected(true);
+    if (!isMountedRef.current) return;
+
+    setSseStatus((prev) => (prev === 'connected' ? 'reconnecting' : prev === 'disconnected' ? 'connecting' : prev));
+
+    const es = new EventSource('/api/v1/realtime/stream');
+    eventSourceRef.current = es;
+
+    es.onopen = () => {
+      if (!isMountedRef.current) return;
+      retryCountRef.current = 0; // Reset backoff counter
+      setSseStatus('connected');
       setStatusLog('[SSE STREAM] Connected to POLARIS realtime telemetry channel.');
     };
 
-    eventSource.onerror = () => {
-      setSseConnected(false);
-      setStatusLog('[SSE STREAM] Connection dropped. Attempting automatic reconnection...');
+    es.onerror = () => {
+      if (!isMountedRef.current) return;
+      es.close();
+      if (eventSourceRef.current === es) {
+        eventSourceRef.current = null;
+      }
+
+      setSseStatus('reconnecting');
+      // Exponential backoff: base 1.5s, factor 1.5, capped at 15s
+      const delay = Math.min(1500 * Math.pow(1.5, retryCountRef.current), 15000);
+      retryCountRef.current += 1;
+
+      setStatusLog(
+        `[SSE STREAM] Stream interrupted. Reconnecting in ${(delay / 1000).toFixed(1)}s (attempt ${retryCountRef.current})...`
+      );
+
+      reconnectTimeoutRef.current = setTimeout(() => {
+        if (isMountedRef.current) {
+          connectSse();
+        }
+      }, delay);
     };
 
-    eventSource.addEventListener('sensor:update', (e: MessageEvent) => {
+    es.addEventListener('sensor:update', (e: MessageEvent) => {
+      if (!isMountedRef.current) return;
       try {
         const data: SensorReading = JSON.parse(e.data);
         setLatestReading(data);
@@ -120,29 +166,81 @@ export default function App() {
             if (!prev) {
               return {
                 deviceId: data.deviceId,
-                currentDepth: data.depth,
-                currentTemperature: data.temperature,
-                currentPressure: data.pressure,
-                currentSalinity: data.salinity,
+                available: true,
+                currentDepth: data.depth!,
+                currentTemperature: data.temperature ?? null,
+                currentPressure: data.pressure ?? null,
+                currentSalinity: data.salinity ?? null,
                 depthStrata: [],
-                lastProfileTime: data.timestamp,
+                timestamp: data.timestamp,
               };
             }
             return {
               ...prev,
-              currentDepth: data.depth,
+              currentDepth: data.depth!,
               currentTemperature: data.temperature ?? prev.currentTemperature,
               currentPressure: data.pressure ?? prev.currentPressure,
               currentSalinity: data.salinity ?? prev.currentSalinity,
-              lastProfileTime: data.timestamp,
+              timestamp: data.timestamp,
             };
           });
         }
 
         // Update battery if included
-        if (data.battery !== undefined) {
-          setBatteryData((prev) => prev ? { ...prev, percentage: data.battery!, voltage: data.batteryVoltage ?? prev.voltage } : null);
+        if (data.battery !== undefined && data.battery !== null) {
+          setBatteryData((prev) =>
+            prev ? { ...prev, level: data.battery!, voltage: data.batteryVoltage ?? prev.voltage } : null
+          );
         }
+
+        // Keep statusData consistent and online whenever fresh telemetry is received
+        const readingTimestamp = data.timestamp || new Date().toISOString();
+        setStatusData((prev) => {
+          if (!prev) {
+            return {
+              deviceId: data.deviceId || 'POLARIS-001',
+              status: 'online',
+              isOnline: true,
+              lastSeen: readingTimestamp,
+              secondsSinceLastSeen: 0,
+              timeoutThresholdSeconds: 60,
+              battery: {
+                level: data.battery ?? null,
+                voltage: data.batteryVoltage ?? null,
+                status: data.battery !== null && data.battery !== undefined && data.battery <= 20 ? 'low' : 'normal',
+              },
+              communication: {
+                protocol: (data.ingestionMethod || 'HTTP').toUpperCase(),
+                status: 'connected',
+                lastCommTimestamp: readingTimestamp,
+              },
+            };
+          }
+          return {
+            ...prev,
+            status: 'online',
+            isOnline: true,
+            lastSeen: readingTimestamp,
+            secondsSinceLastSeen: 0,
+            battery: {
+              ...prev.battery,
+              level: data.battery ?? prev.battery?.level ?? null,
+              voltage: data.batteryVoltage ?? prev.battery?.voltage ?? null,
+              status:
+                data.battery !== null && data.battery !== undefined
+                  ? data.battery <= 20
+                    ? 'low'
+                    : 'normal'
+                  : prev.battery?.status ?? 'normal',
+            },
+            communication: {
+              ...prev.communication,
+              protocol: (data.ingestionMethod || prev.communication?.protocol || 'HTTP').toUpperCase(),
+              status: 'connected',
+              lastCommTimestamp: readingTimestamp,
+            },
+          };
+        });
 
         setStatusLog(`[SSE EVENT] Live reading: ${data.temperature}°C, Depth ${data.depth}m, Salinity ${data.salinity} PSU`);
       } catch (err) {
@@ -150,17 +248,89 @@ export default function App() {
       }
     });
 
-    eventSource.addEventListener('device:update', (e: MessageEvent) => {
+    es.addEventListener('device:update', (e: MessageEvent) => {
+      if (!isMountedRef.current) return;
       try {
         const data = JSON.parse(e.data);
-        setStatusData(data);
-        setStatusLog(`[DEVICE UPDATE] Status: ${data.online ? 'ONLINE' : 'OFFLINE'}`);
+        const isOnline = data.isOnline ?? (data.status === 'online');
+        setStatusData((prev) => {
+          if (!prev) {
+            return {
+              ...data,
+              isOnline,
+              status: isOnline ? 'online' : 'offline',
+            };
+          }
+          return {
+            ...prev,
+            ...data,
+            isOnline,
+            status: isOnline ? 'online' : 'offline',
+            battery: {
+              ...prev.battery,
+              ...(typeof data.battery === 'object' ? data.battery : { level: data.battery }),
+            },
+            communication: {
+              ...prev.communication,
+              ...(typeof data.communication === 'object' ? data.communication : {}),
+            },
+          };
+        });
+        setStatusLog(`[DEVICE UPDATE] Status: ${isOnline ? 'ONLINE' : 'OFFLINE'}`);
       } catch (err) {
         console.error('Failed to parse device update', err);
       }
     });
 
-    eventSource.addEventListener('alert:new', (e: MessageEvent) => {
+    es.addEventListener('location:update', (e: MessageEvent) => {
+      if (!isMountedRef.current) return;
+      try {
+        const data = JSON.parse(e.data);
+        setLocationData({
+          deviceId: data.deviceId || 'POLARIS-001',
+          available: true,
+          location: data.location || {
+            latitude: data.latitude,
+            longitude: data.longitude,
+            altitude: data.altitude,
+            speed: data.speed,
+            timestamp: data.timestamp,
+          },
+        });
+      } catch (err) {
+        console.error('Failed to parse location update', err);
+      }
+    });
+
+    es.addEventListener('communication:update', (e: MessageEvent) => {
+      if (!isMountedRef.current) return;
+      try {
+        const data = JSON.parse(e.data);
+        setCommData(data);
+        if (data.status === 'connected' || data.isOnline) {
+          setStatusData((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  isOnline: true,
+                  status: 'online',
+                  secondsSinceLastSeen: 0,
+                  communication: {
+                    protocol: data.protocol || prev.communication?.protocol || 'HTTP',
+                    status: data.status || 'connected',
+                    lastCommTimestamp: data.lastSeen || data.timestamp || new Date().toISOString(),
+                  },
+                }
+              : prev
+          );
+        }
+      } catch (err) {
+        console.error('Failed to parse communication update', err);
+      }
+    });
+
+    es.addEventListener('alert:new', (e: MessageEvent) => {
+      if (!isMountedRef.current) return;
       try {
         const data: SystemAlert = JSON.parse(e.data);
         setAlerts((prev) => [data, ...prev]);
@@ -169,15 +339,39 @@ export default function App() {
         console.error('Failed to parse alert', err);
       }
     });
+  }, []);
 
-    // Heartbeat fallback poll every 8 seconds
-    const interval = setInterval(fetchAll, 8000);
+  const handleManualReconnectSse = () => {
+    retryCountRef.current = 0;
+    connectSse();
+  };
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    fetchAll();
+    connectSse();
+
+    // Heartbeat fallback poll every 8 seconds to ensure REST telemetry always functions
+    const interval = setInterval(() => {
+      if (isMountedRef.current) {
+        fetchAll();
+      }
+    }, 8000);
 
     return () => {
-      eventSource.close();
+      isMountedRef.current = false;
       clearInterval(interval);
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
     };
-  }, [fetchAll]);
+  }, [fetchAll, connectSse]);
+
 
   // 3. Simulator Actions
   const generateRealisticPayload = (overrides?: any) => {
@@ -345,8 +539,11 @@ export default function App() {
         healthData={healthData}
         batteryData={batteryData}
         commData={commData}
-        sseConnected={sseConnected}
-        onRefresh={fetchAll}
+        locationData={locationData}
+        sseStatus={sseStatus}
+        isLoading={isRefreshing}
+        onRefresh={handleManualRefresh}
+        onReconnectSse={handleManualReconnectSse}
       />
 
       {/* Network Alert Notification if disconnected */}
@@ -413,9 +610,24 @@ export default function App() {
       <footer className="border-t border-slate-900 bg-slate-950/80 px-6 py-4 text-xs text-slate-500">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            <div className={`w-2 h-2 rounded-full ${sseConnected ? 'bg-emerald-400' : 'bg-rose-400'}`}></div>
+            <div
+              className={`w-2 h-2 rounded-full ${
+                sseStatus === 'connected'
+                  ? 'bg-emerald-400'
+                  : sseStatus === 'reconnecting' || sseStatus === 'connecting'
+                  ? 'bg-amber-400 animate-pulse'
+                  : 'bg-rose-400'
+              }`}
+            ></div>
             <span>
-              POLARIS Ocean Monitoring System • Realtime Telemetry Stream: {sseConnected ? 'Active' : 'Offline'}
+              POLARIS Ocean Monitoring System • Realtime Telemetry Stream:{' '}
+              {sseStatus === 'connected'
+                ? 'Active'
+                : sseStatus === 'reconnecting'
+                ? 'Reconnecting'
+                : sseStatus === 'connecting'
+                ? 'Connecting'
+                : 'Offline'}
             </span>
           </div>
           <div className="flex items-center gap-4">

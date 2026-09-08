@@ -34,14 +34,29 @@ export class DeviceService {
       };
     }
 
-    const lastSeenTime = latestReading?.timestamp
-      ? new Date(latestReading.timestamp).getTime()
-      : device?.lastSeen
-      ? new Date(device.lastSeen).getTime()
-      : 0;
+    const candidates = [
+      latestReading?.timestamp ? new Date(latestReading.timestamp).getTime() : 0,
+      device?.lastSeen ? new Date(device.lastSeen).getTime() : 0,
+      latestComm?.lastSeen ? new Date(latestComm.lastSeen).getTime() : 0,
+      latestComm?.timestamp ? new Date(latestComm.timestamp).getTime() : 0,
+    ].filter((t) => t > 0 && !isNaN(t));
 
-    const elapsedSeconds = Math.floor((Date.now() - lastSeenTime) / 1000);
+    const lastSeenTime = candidates.length > 0 ? Math.max(...candidates) : 0;
+    const elapsedSeconds = lastSeenTime > 0 ? Math.max(0, Math.floor((Date.now() - lastSeenTime) / 1000)) : 999999;
     const isOnline = lastSeenTime > 0 && elapsedSeconds <= env.DEVICE_OFFLINE_TIMEOUT;
+
+    if (device && device.status !== (isOnline ? 'online' : 'offline')) {
+      await db.device.upsert({
+        where: { deviceId },
+        create: {
+          deviceId,
+          name: device.name || `POLARIS Unit (${deviceId})`,
+          status: isOnline ? 'online' : 'offline',
+          lastSeen: device.lastSeen,
+        },
+        update: { status: isOnline ? 'online' : 'offline' },
+      }).catch(() => {});
+    }
 
     return {
       deviceId: device?.deviceId || deviceId,

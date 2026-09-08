@@ -1,4 +1,5 @@
 import { db } from '../config/database.js';
+import { env } from '../config/env.js';
 import { PayloadValidator } from './payload.validator.js';
 import { PayloadMapper, NormalizedSensorRecord } from './payload.mapper.js';
 import { AlertEngine } from '../alerts/alert.engine.js';
@@ -173,9 +174,27 @@ export class IngestionService {
       realtimeEmitter.broadcast('sensor:update', reading);
       realtimeEmitter.broadcast('device:update', {
         deviceId: device.deviceId,
-        status: device.status,
-        lastSeen: device.lastSeen,
-        battery: normalized.battery,
+        status: 'online',
+        isOnline: true,
+        lastSeen: device.lastSeen.toISOString(),
+        secondsSinceLastSeen: 0,
+        timeoutThresholdSeconds: env.DEVICE_OFFLINE_TIMEOUT,
+        battery: {
+          level: normalized.battery,
+          voltage: normalized.batteryVoltage,
+          status:
+            normalized.battery !== null && normalized.battery !== undefined
+              ? normalized.battery <= env.LOW_BATTERY_THRESHOLD
+                ? 'low'
+                : 'normal'
+              : 'unknown',
+        },
+        communication: {
+          protocol: method.toUpperCase(),
+          status: 'connected',
+          lastCommTimestamp: device.lastSeen.toISOString(),
+        },
+        lastUpdated: new Date().toISOString(),
       });
       if (savedLocation) {
         realtimeEmitter.broadcast('location:update', savedLocation);
